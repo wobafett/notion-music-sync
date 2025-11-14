@@ -1,0 +1,93 @@
+name: Notion MusicBrainz Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      database:
+        description: 'Database to sync (artists, albums, songs, labels, all)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - artists
+          - albums
+          - songs
+          - labels
+      force_all:
+        description: 'Force update all pages (even with existing MBID)'
+        required: false
+        default: false
+        type: boolean
+      last_page:
+        description: 'Sync only the most recently edited page'
+        required: false
+        default: false
+        type: boolean
+  repository_dispatch:
+    types: [sync]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Determine sync parameters
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            # Parse repository_dispatch payload
+            DATABASE="${{ github.event.client_payload.database || 'all' }}"
+            FORCE_ALL="${{ github.event.client_payload.force_all || 'false' }}"
+            LAST_PAGE="${{ github.event.client_payload.last_page || 'false' }}"
+          else
+            # Use workflow_dispatch inputs
+            DATABASE="${{ github.event.inputs.database }}"
+            FORCE_ALL="${{ github.event.inputs.force_all }}"
+            LAST_PAGE="${{ github.event.inputs.last_page }}"
+          fi
+          
+          echo "database=${DATABASE}" >> $GITHUB_OUTPUT
+          echo "force_all=${FORCE_ALL}" >> $GITHUB_OUTPUT
+          echo "last_page=${LAST_PAGE}" >> $GITHUB_OUTPUT
+      
+      - name: Run sync
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_ARTISTS_DATABASE_ID: ${{ secrets.NOTION_ARTISTS_DATABASE_ID }}
+          NOTION_ALBUMS_DATABASE_ID: ${{ secrets.NOTION_ALBUMS_DATABASE_ID }}
+          NOTION_SONGS_DATABASE_ID: ${{ secrets.NOTION_SONGS_DATABASE_ID }}
+          NOTION_LABELS_DATABASE_ID: ${{ secrets.NOTION_LABELS_DATABASE_ID }}
+          NOTION_LOCATIONS_DATABASE_ID: ${{ secrets.NOTION_LOCATIONS_DATABASE_ID }}
+          MUSICBRAINZ_USER_AGENT: ${{ secrets.MUSICBRAINZ_USER_AGENT }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          LOG_LEVEL: INFO
+        run: |
+          python3 notion_musicbrainz_sync.py \
+            --database "${{ steps.params.outputs.database }}" \
+            ${{ steps.params.outputs.force_all == 'true' && '--force-all' || '' }} \
+            ${{ steps.params.outputs.last_page == 'true' && '--last-page' || '' }}
+      
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: sync-logs
+          path: notion_musicbrainz_sync.log
+          retention-days: 7
+
